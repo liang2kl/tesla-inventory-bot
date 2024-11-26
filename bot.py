@@ -6,19 +6,39 @@ from typing import Optional
 import os
 from collections import OrderedDict
 import json
+from functools import wraps
 
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # Telegram chat IDs that are authorized to use this bot
-AUTHORIZED_CHAT_IDS = []
+AUTHORIZED_CHAT_IDS = [
+    # Add your chat ID here
+]
 
 # Telegram Bot API Token
-TELEGRAM_API_TOKEN = None
+TELEGRAM_API_TOKEN = "" # Add your bot token here
 
 # Interval to check for new dates (in seconds)
 LOOKUP_INTERVAL_SEC = 60 * 4 # 2 minutes
 
+# Tesla model
+MODEL = "m3"
+
+# Condition
+CONDITION = "used"
+
 last_prices = OrderedDict()
+
+def restricted(func):
+    @wraps(func)
+    async def wrapped(update, context, *args, **kwargs):
+        user_id = update.effective_user.id
+        if user_id not in AUTHORIZED_CHAT_IDS:
+            await update.message.reply_text(f"You (id {user_id}) are not authorized to use this bot.")
+            return
+        return await func(update, context, *args, **kwargs)
+
+    return wrapped
 
 
 def request_page(vehicle_id: str):
@@ -39,11 +59,11 @@ def request_page(vehicle_id: str):
     }
 
     params = {
-        'titleStatus': 'used',
+        'titleStatus': CONDITION,
         'redirect': 'no',
     }
 
-    response = requests.get(f'https://www.tesla.com/m3/order/{vehicle_id}', params=params, headers=headers)
+    response = requests.get(f'https://www.tesla.com/{MODEL}/order/{vehicle_id}', params=params, headers=headers)
     return response
 
 def get_vehicle_price(text: str) -> Optional[int]:
@@ -56,7 +76,7 @@ def get_vehicle_price(text: str) -> Optional[int]:
     return int(text)
     
 
-async def get_price(vehicle_id: str) -> Optional[int]:
+def get_price(vehicle_id: str) -> Optional[int]:
     # send GET request to the DMV Appointments API
     response = request_page(vehicle_id)
 
@@ -69,9 +89,9 @@ async def get_price(vehicle_id: str) -> Optional[int]:
     # get the price from the response
     return get_vehicle_price(response.text)
 
-async def get_and_update_price(vehicle_id: str) -> Optional[bool]:
+def get_and_update_price(vehicle_id: str) -> Optional[bool]:
     # get the price of the vehicle
-    price = await get_price(vehicle_id)
+    price = get_price(vehicle_id)
     if price is None:
         return None
 
@@ -83,10 +103,18 @@ async def get_and_update_price(vehicle_id: str) -> Optional[bool]:
 
     return False
 
-
 async def send_welcome(update, context):
-    await update.message.reply_text("Let's hunt a Tesla! 🚗")
+    msg = "Let's hunt a Tesla! 🚗\n"
+    msg += "Commands:\n"
+    msg += "/add <VIN>: Add a vehicle to the list.\n"
+    msg += "/remove <VIN>: Remove a vehicle from the list.\n"
+    msg += "/prices: Get the prices of the vehicles in the list.\n"
+    msg += "/id: Get your chat ID.\n"
 
+    msg += "\nYour chat ID is " + str(update.message.chat_id) + "."
+    await update.message.reply_text(msg)
+
+@restricted
 async def add_vehicle(update, context):
     if len(context.args) != 1:
         await update.message.reply_text("Usage: /add <VIN>")
@@ -98,7 +126,7 @@ async def add_vehicle(update, context):
 
     vehicle_id = context.args[0]
     last_prices[vehicle_id] = None
-    result = await get_and_update_price(vehicle_id)
+    result = get_and_update_price(vehicle_id)
     if result is None:
         last_prices.pop(vehicle_id)
         await update.message.reply_text(f"Failed to add vehicle {vehicle_id} to the list.")
@@ -106,6 +134,7 @@ async def add_vehicle(update, context):
     write_vins_to_file()
     await update.message.reply_text(f"Added vehicle {vehicle_id} to the list. Current price: ${last_prices[vehicle_id]}.")
 
+@restricted
 async def remove_vehicle(update, context):
     if len(context.args) != 1:
         await update.message.reply_text("Usage: /remove <VIN>")
@@ -120,7 +149,7 @@ async def remove_vehicle(update, context):
     write_vins_to_file()
     await update.message.reply_text(f"Removed vehicle {vehicle_id} from the list.")
 
-# Handle dates command
+@restricted
 async def send_prices(update, context):
     # check if chat ID is valid first
     if update.message.chat_id not in AUTHORIZED_CHAT_IDS:
@@ -128,11 +157,10 @@ async def send_prices(update, context):
         return
 
     await context.bot.send_chat_action(chat_id=update.message.chat_id, action="typing")
-    await update.message.reply_text("Getting prices...")
 
     try:
         for v in last_prices:
-            await get_and_update_price(v)
+            get_and_update_price(v)
         
         message = "Prices:\n" + "\n".join([f"{v}: {p}" for v, p in last_prices.items()])
         await update.message.reply_text(message)
@@ -149,19 +177,19 @@ async def callback_minute(context: ContextTypes.DEFAULT_TYPE):
     
     try:
         for v in last_prices:
-            if await get_and_update_price(v):
-                texts_to_send.append(f"Price of vehicle {v} has changed to {last_prices[v]}!")
+            old_price = last_prices[v]
+            if get_and_update_price(v):
+                texts_to_send.append(f"{v}: {old_price} -> {last_prices[v]}")
 
     except Exception as e:
-        print("Error: There was an exception.")
-        print(e)
+        print("Error: There was an exception:", e)
         texts_to_send.append("Error: There was an exception.")
         texts_to_send.append(str(e))
         return        
     
     if texts_to_send:
         for chat_id in AUTHORIZED_CHAT_IDS:
-            await context.bot.send_message(chat_id=chat_id, text="\n".join(texts_to_send))        
+            await context.bot.send_message(chat_id=chat_id, text="Price change detected!\n" + "\n".join(texts_to_send))        
 
 def read_vins_from_file():
     global last_prices
@@ -178,14 +206,10 @@ def write_vins_to_file():
         json.dump(last_prices, f)
 
 if __name__ == "__main__":
-    AUTHORIZED_CHAT_IDS = [int(x) for x in os.environ.get("AUTHORIZED_CHAT_IDS", "").split(",")]
-    TELEGRAM_API_TOKEN = os.environ.get("TELEGRAM_API_TOKEN", None)
-    if TELEGRAM_API_TOKEN is None:
+    if not TELEGRAM_API_TOKEN:
         print("Error: TELEGRAM_API_TOKEN is not set.")
         exit(1)
-    if not AUTHORIZED_CHAT_IDS:
-        print("Error: AUTHORIZED_CHAT_IDS is not set.")
-        exit(1)
+    
         
     read_vins_from_file()
     app = ApplicationBuilder().token(TELEGRAM_API_TOKEN).build()
