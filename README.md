@@ -1,5 +1,8 @@
 # Tesla Inventory Monitor Bot
 
+> [!TIP]
+> If you are to purchase a new Tesla vehicle, please consider using my referral code [here](https://ts.la/yesheng394959) to get up to $2,000 off!
+
 A telegram bot to monitor price changes of vehicles in Tesla's inventory.
 
 First, create a bot using [BotFather](https://t.me/BotFather) and obtain the token. Fill your token in `bot.py`.
