@@ -5,6 +5,10 @@
 
 A telegram bot to monitor price changes of vehicles in Tesla's inventory.
 
+![Screenshot](screenshot.png)
+
+## Usage
+
 1. First, create a bot using [BotFather](https://t.me/BotFather) and obtain the token. Fill your token in `bot.py`.
     ```python
     TELEGRAM_API_TOKEN = "..."
